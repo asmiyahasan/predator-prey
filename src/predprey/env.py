@@ -103,6 +103,7 @@ class PredatorPreyEnv(ParallelEnv):
         self.step_count += 1
 
         caught = is_caught(self.states[PREDATOR], self.states[PREY])
+        self.caught = caught
         out_of_time = self.step_count >= self.max_steps
 
         if caught:
