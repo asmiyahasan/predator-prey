@@ -26,7 +26,7 @@ OBS_SIZE = 8
 
 
 class PredatorPreyEnv(ParallelEnv):
-    metadata = {"name": "predator_prey_v0", "render_modes": ["human"]}
+    metadata = {"name": "predator_prey_v0", "render_modes": ["human"], "render_fps": 10}
 
     def __init__(self, max_steps: int = 300, render_mode: str | None = None):
         self.max_steps = max_steps
@@ -54,6 +54,12 @@ class PredatorPreyEnv(ParallelEnv):
         self.states: dict[str, AgentState] = {}
         self.step_count = 0
 
+        self.caught = False
+        self.renderer = None
+        if render_mode == "human":
+            from predprey.render import Renderer  # imported here so CI never needs pygame's display
+            self.renderer = Renderer(fps=self.metadata["render_fps"])
+
     # ------------------------------------------------------------------
     # Spaces
     # ------------------------------------------------------------------
@@ -72,6 +78,8 @@ class PredatorPreyEnv(ParallelEnv):
 
         self.agents = self.possible_agents[:]
         self.step_count = 0
+
+        self.caught = False
 
         predator_pos = self._random_position()
         prey_pos = self._random_position()
@@ -119,10 +127,12 @@ class PredatorPreyEnv(ParallelEnv):
         return observations, rewards, terminations, truncations, infos
 
     def render(self):
-        pass  # pygame viewer comes later
+        if self.renderer is not None and self.renderer.is_open:
+            self.renderer.draw(self.states, self.step_count, self.caught)
 
     def close(self):
-        pass
+        if self.renderer is not None:
+            self.renderer.close()
 
     # ------------------------------------------------------------------
     # Helpers
