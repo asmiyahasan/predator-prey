@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 from gymnasium.utils.env_checker import check_env
 
@@ -12,6 +13,9 @@ def stay_still(obs):
     return STAY
 
 
+# ----------------------------------------------------------------------
+# Single fixed opponent
+# ----------------------------------------------------------------------
 @pytest.mark.parametrize(
     "agent, opponent",
     [(PREDATOR, fleer), (PREY, chaser)],
@@ -43,7 +47,7 @@ def test_predator_catches_stationary_prey():
 
 def test_prey_gets_positive_reward_while_surviving():
     env = SingleAgentEnv(agent=PREY, opponent=stay_still, max_steps=5)
-    obs, _ = env.reset(seed=0)
+    env.reset(seed=0)
     _, reward, terminated, truncated, _ = env.step(STAY)
     assert reward > 0
     assert not terminated and not truncated
@@ -57,3 +61,63 @@ def test_opponent_sees_its_own_observation():
     while not done:
         _, _, terminated, truncated, _ = env.step(env.action_space.sample())
         done = terminated or truncated
+
+
+# ----------------------------------------------------------------------
+# Opponent sampler (self-play)
+# ----------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"opponent": fleer, "opponent_sampler": lambda rng: fleer},  # both
+        {},                                                           # neither
+    ],
+    ids=["both", "neither"],
+)
+def test_must_pass_exactly_one_opponent_source(kwargs):
+    with pytest.raises(ValueError):
+        SingleAgentEnv(agent=PREDATOR, **kwargs)
+
+
+def test_sampler_called_on_every_reset():
+    received = []
+
+    def counting_sampler(rng):
+        received.append(rng)
+        return stay_still
+
+    env = SingleAgentEnv(agent=PREDATOR, opponent_sampler=counting_sampler)
+    for episode in range(3):
+        env.reset(seed=episode)
+
+    assert len(received) == 3
+    # The sampler gets the env's random generator, so its choices are reproducible
+    assert all(isinstance(rng, np.random.Generator) for rng in received)
+
+
+def test_sampled_opponent_is_the_one_that_plays():
+    calls = {"a": 0, "b": 0}
+
+    def opponent_a(obs):
+        calls["a"] += 1
+        return STAY
+
+    def opponent_b(obs):
+        calls["b"] += 1
+        return STAY
+
+    choices = iter([opponent_a, opponent_b])
+    env = SingleAgentEnv(agent=PREDATOR, opponent_sampler=lambda rng: next(choices))
+
+    env.reset(seed=0)          # picks opponent_a
+    env.step(STAY)
+    env.step(STAY)
+    env.reset(seed=1)          # picks opponent_b
+    env.step(STAY)
+
+    assert calls == {"a": 2, "b": 1}
+
+
+def test_gymnasium_api_with_sampler():
+    env = SingleAgentEnv(agent=PREY, opponent_sampler=lambda rng: chaser)
+    check_env(env, skip_render_check=True)

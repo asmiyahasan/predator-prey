@@ -1,15 +1,25 @@
 """Wrap the two-agent environment as a single-agent Gymnasium environment.
 
-One side is controlled by the learner; the other is a fixed policy (e.g. a
-scripted agent or a frozen checkpoint). This turns a multi-agent problem into
-a normal single-agent one that standard RL code can train on.
+One side is controlled by the learner; the other is played by a fixed policy
+(a scripted agent or a frozen snapshot of a trained network). This turns a
+multi-agent problem into a normal single-agent one that standard RL code can
+train on.
+
+Pass either:
+- `opponent`: one policy used for every episode, or
+- `opponent_sampler`: a function that picks an opponent at each reset
+  (used for self-play with an opponent pool).
 """
+
+from collections.abc import Callable
 
 import gymnasium as gym
 import numpy as np
 
 from predprey.agents import Policy
 from predprey.env import PREDATOR, PREY, PredatorPreyEnv
+
+OpponentSampler = Callable[[np.random.Generator], Policy]
 
 
 class SingleAgentEnv(gym.Env):
@@ -18,16 +28,20 @@ class SingleAgentEnv(gym.Env):
     def __init__(
         self,
         agent: str,
-        opponent: Policy,
+        opponent: Policy | None = None,
+        opponent_sampler: OpponentSampler | None = None,
         max_steps: int = 300,
         render_mode: str | None = None,
     ):
         if agent not in (PREDATOR, PREY):
             raise ValueError(f"agent must be '{PREDATOR}' or '{PREY}', got '{agent}'")
+        if (opponent is None) == (opponent_sampler is None):
+            raise ValueError("pass exactly one of `opponent` or `opponent_sampler`")
 
         self.agent = agent
         self.opponent_name = PREY if agent == PREDATOR else PREDATOR
         self.opponent = opponent
+        self.opponent_sampler = opponent_sampler
         self.render_mode = render_mode
 
         self.env = PredatorPreyEnv(max_steps=max_steps, render_mode=render_mode)
@@ -40,6 +54,11 @@ class SingleAgentEnv(gym.Env):
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)  # seeds Gymnasium's own self.np_random
+
+        # With a pool, each episode is played against a freshly chosen opponent
+        if self.opponent_sampler is not None:
+            self.opponent = self.opponent_sampler(self.np_random)
+
         observations, infos = self.env.reset(seed=seed, options=options)
         self._opponent_obs = observations[self.opponent_name]
         return observations[self.agent], infos[self.agent]
