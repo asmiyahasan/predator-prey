@@ -1,0 +1,1 @@
+[![Tests](https://github.com/asmiyahasan/predator-prey/actions/workflows/tests.yml/badge.svg)](https://github.com/asmiyahasan/predator-prey/actions/workflows/tests.yml)
