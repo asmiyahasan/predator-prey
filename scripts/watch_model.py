@@ -19,12 +19,14 @@ Usage:
 """
 
 import argparse
+import json
 from pathlib import Path
 
 from stable_baselines3 import PPO
 
 from predprey.agents import Policy, chaser, fleer, make_random_policy
-from predprey.env import PREDATOR, PREY, PredatorPreyEnv
+from predprey.env import PREDATOR, PREY, GameConfig, PredatorPreyEnv
+from predprey.observations import OBS_SIZE
 
 SCRIPTED = {
     "chaser": lambda: chaser,
@@ -48,11 +50,38 @@ def load_policy(spec: str) -> Policy:
 
     model = PPO.load(path, device="cpu")
 
+    # Models trained before obstacles and raycasts expect a different observation size
+    if model.observation_space.shape != (OBS_SIZE,):
+        raise SystemExit(
+            f"'{spec}' expects observations of shape {model.observation_space.shape}, "
+            f"but the current game produces ({OBS_SIZE},). It was trained on an older "
+            f"version of the environment and needs retraining."
+        )
+
     def trained(obs):
         action, _ = model.predict(obs, deterministic=True)
         return int(action)
 
     return trained
+
+
+def find_config(specs: list[str]) -> GameConfig:
+    """Use the config.json saved with a model's training run, if there is one.
+
+    Self-play models live at models/<run>/<side>/gen_XXX.zip, with the config
+    at models/<run>/config.json, so we look one and two folders up.
+    """
+    for spec in specs:
+        path = Path(spec)
+        if spec in SCRIPTED or not path.exists():
+            continue
+        for folder in (path.parent, path.parent.parent):
+            config_path = folder / "config.json"
+            if config_path.exists():
+                print(f"Using game config from {config_path}")
+                return GameConfig.from_dict(json.loads(config_path.read_text()))
+    print("No config.json found, using default game settings")
+    return GameConfig()
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,6 +92,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fps", type=int, default=10, help="10 = real time")
     parser.add_argument("--seed", type=int, default=None,
                         help="set to replay the same starting positions")
+    parser.add_argument("--show-rays", action="store_true",
+                        help="draw each agent's raycasts (or press R in the window)")
     return parser.parse_args()
 
 
@@ -70,8 +101,10 @@ def main() -> None:
     args = parse_args()
     policies = {PREDATOR: load_policy(args.predator), PREY: load_policy(args.prey)}
 
-    env = PredatorPreyEnv(render_mode="human")
+    config = find_config([args.predator, args.prey])
+    env = PredatorPreyEnv(render_mode="human", config=config)
     env.renderer.fps = args.fps
+    env.renderer.show_rays = args.show_rays
     print(f"Predator: {args.predator}\nPrey:     {args.prey}\n")
 
     for episode in range(args.episodes):

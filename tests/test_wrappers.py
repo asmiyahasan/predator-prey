@@ -3,7 +3,7 @@ import pytest
 from gymnasium.utils.env_checker import check_env
 
 from predprey.agents import chaser, fleer, make_random_policy
-from predprey.env import PREDATOR, PREY
+from predprey.env import PREDATOR, PREY, GameConfig
 from predprey.wrappers import SingleAgentEnv
 
 STAY = 0
@@ -32,8 +32,9 @@ def test_invalid_agent_name_raises():
 
 
 def test_predator_catches_stationary_prey():
-    # Drive the wrapped predator with the chaser against a prey that never moves
-    env = SingleAgentEnv(agent=PREDATOR, opponent=stay_still)
+    # Drive the wrapped predator with the chaser against a prey that never moves.
+    # Open arena, so the straight-line chaser can't get stuck behind a block.
+    env = SingleAgentEnv(agent=PREDATOR, opponent=stay_still, config=GameConfig(obstacles=()))
     obs, _ = env.reset(seed=0)
 
     terminated = truncated = False

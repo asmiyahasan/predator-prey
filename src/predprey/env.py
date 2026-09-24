@@ -1,16 +1,22 @@
 """Predator vs prey environment using PettingZoo's Parallel API."""
 
+from dataclasses import asdict, dataclass
+
 import numpy as np
 from gymnasium import spaces
 from pettingzoo import ParallelEnv
 
+from predprey.observations import OBS_SIZE, build_observation
 from predprey.physics import (
     ARENA_SIZE,
     NUM_ACTIONS,
     AgentState,
     is_caught,
+    obstacle_bounds,
+    overlaps_obstacle,
     step_agent,
 )
+from predprey.sensors import has_line_of_sight
 
 PREDATOR = "predator"
 PREY = "prey"
@@ -22,20 +28,64 @@ CATCH_REWARD = 1.0
 # Minimum distance between agents when an episode starts
 MIN_SPAWN_DISTANCE = 3.0
 
-OBS_SIZE = 8
+# Rectangles as (x, y, width, height), where (x, y) is the bottom-left corner.
+# Four blocks around the centre, with corridors between them and along the walls.
+# Blocks must be thicker than two agent radii (0.6), or catches could happen through them.
+FOUR_BLOCKS = (
+    (2.2, 2.2, 1.6, 1.6),
+    (6.2, 2.2, 1.6, 1.6),
+    (2.2, 6.2, 1.6, 1.6),
+    (6.2, 6.2, 1.6, 1.6),
+)
+
+Rect = tuple[float, float, float, float]
+
+
+@dataclass(frozen=True)
+class GameConfig:
+    """Tunable game settings. Saved with every training run for reproducibility."""
+
+    predator_max_speed: float = 3.0
+    predator_acceleration: float = 7.0
+    prey_max_speed: float = 3.0
+    prey_acceleration: float = 9.0
+    obstacles: tuple[Rect, ...] = FOUR_BLOCKS
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "GameConfig":
+        """Rebuild a config from JSON, where tuples come back as lists."""
+        data = dict(data)
+        if "obstacles" in data:
+            data["obstacles"] = tuple(tuple(float(v) for v in rect) for rect in data["obstacles"])
+        return cls(**data)
 
 
 class PredatorPreyEnv(ParallelEnv):
-    metadata = {"name": "predator_prey_v0", "render_modes": ["human"], "render_fps": 10}
+    metadata = {"name": "predator_prey_v1", "render_modes": ["human"], "render_fps": 10}
 
-    def __init__(self, max_steps: int = 300, render_mode: str | None = None):
+    def __init__(
+        self,
+        max_steps: int = 300,
+        render_mode: str | None = None,
+        config: GameConfig | None = None,
+    ):
         self.max_steps = max_steps
         self.render_mode = render_mode
+        self.config = config or GameConfig()
+        self.obstacles = obstacle_bounds(self.config.obstacles)
 
-        # Species settings: predator is faster, prey is more agile
         self.species = {
-            PREDATOR: {"max_speed": 3.0, "acceleration": 7.0},
-            PREY: {"max_speed": 3.0, "acceleration": 9.0},
+            PREDATOR: {
+                "max_speed": self.config.predator_max_speed,
+                "acceleration": self.config.predator_acceleration,
+            },
+            PREY: {
+                "max_speed": self.config.prey_max_speed,
+                "acceleration": self.config.prey_acceleration,
+            },
         }
 
         self.possible_agents = [PREDATOR, PREY]
@@ -53,11 +103,11 @@ class PredatorPreyEnv(ParallelEnv):
         self._rng = np.random.default_rng()
         self.states: dict[str, AgentState] = {}
         self.step_count = 0
-
         self.caught = False
+
         self.renderer = None
         if render_mode == "human":
-            from predprey.render import Renderer  # imported here so CI never needs pygame's display
+            from predprey.render import Renderer  # imported here so CI never needs a display
             self.renderer = Renderer(fps=self.metadata["render_fps"])
 
     # ------------------------------------------------------------------
@@ -78,14 +128,13 @@ class PredatorPreyEnv(ParallelEnv):
 
         self.agents = self.possible_agents[:]
         self.step_count = 0
-
         self.caught = False
 
-        predator_pos = self._random_position()
-        prey_pos = self._random_position()
+        predator_pos = self._random_free_position()
+        prey_pos = self._random_free_position()
         # Rejection sampling: re-roll the prey until it's far enough away
         while np.linalg.norm(prey_pos - predator_pos) < MIN_SPAWN_DISTANCE:
-            prey_pos = self._random_position()
+            prey_pos = self._random_free_position()
 
         self.states = {
             PREDATOR: AgentState(position=predator_pos, **self.species[PREDATOR]),
@@ -99,7 +148,7 @@ class PredatorPreyEnv(ParallelEnv):
     def step(self, actions: dict[str, int]):
         # Both agents move at the same time
         for agent in self.agents:
-            step_agent(self.states[agent], int(actions[agent]))
+            step_agent(self.states[agent], int(actions[agent]), self.obstacles)
         self.step_count += 1
 
         caught = is_caught(self.states[PREDATOR], self.states[PREY])
@@ -117,8 +166,9 @@ class PredatorPreyEnv(ParallelEnv):
         truncations = {agent: out_of_time and not caught for agent in self.agents}
 
         observations = {agent: self._get_obs(agent) for agent in self.agents}
+        visible = self.can_see_each_other()
         infos = {
-            agent: {"caught": caught, "steps": self.step_count}
+            agent: {"caught": caught, "steps": self.step_count, "visible": visible}
             for agent in self.agents
         }
 
@@ -129,7 +179,13 @@ class PredatorPreyEnv(ParallelEnv):
 
     def render(self):
         if self.renderer is not None and self.renderer.is_open:
-            self.renderer.draw(self.states, self.step_count, self.caught)
+            self.renderer.draw(
+                self.states,
+                self.step_count,
+                self.caught,
+                obstacles=self.obstacles,
+                visible=self.can_see_each_other(),
+            )
 
     def close(self):
         if self.renderer is not None:
@@ -138,21 +194,20 @@ class PredatorPreyEnv(ParallelEnv):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _random_position(self) -> np.ndarray:
+    def can_see_each_other(self) -> bool:
+        return has_line_of_sight(
+            self.states[PREDATOR].position, self.states[PREY].position, self.obstacles
+        )
+
+    def _random_free_position(self) -> np.ndarray:
+        """A random position inside the arena that doesn't overlap an obstacle."""
         radius = AgentState(position=[0.0, 0.0]).radius
-        return self._rng.uniform(radius, ARENA_SIZE - radius, size=2)
+        while True:
+            position = self._rng.uniform(radius, ARENA_SIZE - radius, size=2)
+            if not overlaps_obstacle(position, radius, self.obstacles):
+                return position
 
     def _get_obs(self, agent: str) -> np.ndarray:
         me = self.states[agent]
         other = self.states[PREY if agent == PREDATOR else PREDATOR]
-
-        speed_scale = me.max_speed + other.max_speed
-
-        obs = np.concatenate([
-            me.position / ARENA_SIZE * 2 - 1,                    # own position
-            me.velocity / me.max_speed,                          # own velocity
-            (other.position - me.position) / ARENA_SIZE,         # opponent, relative
-            (other.velocity - me.velocity) / speed_scale,        # opponent velocity, relative
-        ])
-        # Guard against tiny rounding pushing values just past +/-1
-        return np.clip(obs, -1.0, 1.0).astype(np.float32)
+        return build_observation(me, other, self.obstacles)

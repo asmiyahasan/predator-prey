@@ -17,7 +17,7 @@ import gymnasium as gym
 import numpy as np
 
 from predprey.agents import Policy
-from predprey.env import PREDATOR, PREY, PredatorPreyEnv
+from predprey.env import PREDATOR, PREY, GameConfig, PredatorPreyEnv
 
 OpponentSampler = Callable[[np.random.Generator], Policy]
 
@@ -32,6 +32,7 @@ class SingleAgentEnv(gym.Env):
         opponent_sampler: OpponentSampler | None = None,
         max_steps: int = 300,
         render_mode: str | None = None,
+        config: GameConfig | None = None,
     ):
         if agent not in (PREDATOR, PREY):
             raise ValueError(f"agent must be '{PREDATOR}' or '{PREY}', got '{agent}'")
@@ -44,7 +45,7 @@ class SingleAgentEnv(gym.Env):
         self.opponent_sampler = opponent_sampler
         self.render_mode = render_mode
 
-        self.env = PredatorPreyEnv(max_steps=max_steps, render_mode=render_mode)
+        self.env = PredatorPreyEnv(max_steps=max_steps, render_mode=render_mode, config=config)
 
         # In Gymnasium these are attributes, not methods
         self.observation_space = self.env.observation_space(agent)

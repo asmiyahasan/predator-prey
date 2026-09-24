@@ -7,8 +7,12 @@ Each generation:
   4. save a frozen snapshot of it into the prey pool
   5. evaluate and log results
 
+The game settings used are saved to <run>/config.json, so models are always
+watched and evaluated in the same game they were trained in.
+
 Usage:
-    uv run python scripts/train_selfplay.py                                  # full run
+    uv run python scripts/train_selfplay.py
+    uv run python scripts/train_selfplay.py --predator-speed 3.0 --run-name selfplay_equal_speed
     uv run python scripts/train_selfplay.py --generations 2 --steps 20000 --run-name smoke_test
 
 Press Ctrl+C at any time: the latest models are saved before exiting.
@@ -16,6 +20,7 @@ Press Ctrl+C at any time: the latest models are saved before exiting.
 
 import argparse
 import csv
+import json
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +28,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 
 from predprey.agents import Policy, chaser, fleer, make_random_policy
-from predprey.env import PREDATOR, PREY
+from predprey.env import PREDATOR, PREY, GameConfig
 from predprey.evaluation import run_match
 from predprey.wrappers import SingleAgentEnv
 
@@ -73,30 +78,49 @@ def frozen_snapshot(path: Path) -> Policy:
 
 
 def parse_args() -> argparse.Namespace:
+    defaults = GameConfig()
     parser = argparse.ArgumentParser(description="Self-play training with SB3 PPO.")
     parser.add_argument("--generations", type=int, default=10)
     parser.add_argument("--steps", type=int, default=200_000,
                         help="training steps per side per generation")
     parser.add_argument("--run-name", default="selfplay")
+    parser.add_argument("--predator-speed", type=float, default=defaults.predator_max_speed)
+    parser.add_argument("--predator-accel", type=float, default=defaults.predator_acceleration)
+    parser.add_argument("--prey-speed", type=float, default=defaults.prey_max_speed)
+    parser.add_argument("--prey-accel", type=float, default=defaults.prey_acceleration)
     return parser.parse_args()
+
+
+def format_steps(value: float | None) -> str:
+    return f"{value:.1f}" if value is not None else "-"
 
 
 def main() -> None:
     args = parse_args()
+    config = GameConfig(
+        predator_max_speed=args.predator_speed,
+        predator_acceleration=args.predator_accel,
+        prey_max_speed=args.prey_speed,
+        prey_acceleration=args.prey_accel,
+    )
+
     run_dir = MODEL_DIR / args.run_name
     (run_dir / PREDATOR).mkdir(parents=True, exist_ok=True)
     (run_dir / PREY).mkdir(parents=True, exist_ok=True)
+
+    # Record exactly which game these models were trained in
+    (run_dir / "config.json").write_text(json.dumps(config.to_dict(), indent=2))
 
     # Pools start with simple opponents, so neither side forgets the basics
     predator_pool = OpponentPool([("random", make_random_policy(seed=1)), ("chaser", chaser)])
     prey_pool = OpponentPool([("random", make_random_policy(seed=2)), ("fleer", fleer)])
 
     predator_env = make_vec_env(
-        lambda: SingleAgentEnv(agent=PREDATOR, opponent_sampler=prey_pool.sample),
+        lambda: SingleAgentEnv(agent=PREDATOR, opponent_sampler=prey_pool.sample, config=config),
         n_envs=N_ENVS, seed=SEED,
     )
     prey_env = make_vec_env(
-        lambda: SingleAgentEnv(agent=PREY, opponent_sampler=predator_pool.sample),
+        lambda: SingleAgentEnv(agent=PREY, opponent_sampler=predator_pool.sample, config=config),
         n_envs=N_ENVS, seed=SEED + 100,
     )
 
@@ -108,13 +132,16 @@ def main() -> None:
     history_path = run_dir / "history.csv"
     with history_path.open("w", newline="") as f:
         csv.writer(f).writerow([
-            "generation", "latest_vs_latest_catch_rate",
+            "generation",
+            "latest_vs_latest_catch_rate", "latest_vs_latest_avg_catch_step",
             "predator_vs_fleer_catch_rate", "prey_vs_chaser_survival_rate",
         ])
 
     print(f"Self-play: {args.generations} generations x {args.steps:,} steps per side")
-    print(f"{'gen':>4} | {'latest vs latest':>17} | {'pred vs fleer':>13} | {'prey vs chaser':>14}")
-    print("-" * 60)
+    print(f"Game config: {config.to_dict()}\n")
+    print(f"{'gen':>4} | {'latest vs latest':>17} | {'avg catch':>9} | "
+          f"{'pred vs fleer':>13} | {'prey vs chaser':>14}")
+    print("-" * 72)
 
     generation = 0
     try:
@@ -137,13 +164,20 @@ def main() -> None:
             predator = as_policy(predator_model, deterministic=True)
             prey = as_policy(prey_model, deterministic=True)
 
-            head_to_head = run_match(predator, prey, EVAL_EPISODES, seed=EVAL_SEED).catch_rate
-            vs_fleer = run_match(predator, fleer, EVAL_EPISODES, seed=EVAL_SEED).catch_rate
-            vs_chaser = 1 - run_match(chaser, prey, EVAL_EPISODES, seed=EVAL_SEED).catch_rate
+            def match(pred, pry):
+                return run_match(pred, pry, EVAL_EPISODES, seed=EVAL_SEED, config=config)
 
-            print(f"{generation:>4} | {head_to_head:>16.1%} | {vs_fleer:>12.1%} | {vs_chaser:>13.1%}")
+            head_to_head = match(predator, prey)
+            vs_fleer = match(predator, fleer).catch_rate
+            vs_chaser = 1 - match(chaser, prey).catch_rate
+
+            avg_catch = head_to_head.mean_catch_steps
+            print(f"{generation:>4} | {head_to_head.catch_rate:>16.1%} | "
+                  f"{format_steps(avg_catch):>9} | {vs_fleer:>12.1%} | {vs_chaser:>13.1%}")
             with history_path.open("a", newline="") as f:
-                csv.writer(f).writerow([generation, head_to_head, vs_fleer, vs_chaser])
+                csv.writer(f).writerow([
+                    generation, head_to_head.catch_rate, avg_catch, vs_fleer, vs_chaser,
+                ])
 
     except KeyboardInterrupt:
         print("\nInterrupted, saving the latest models...")

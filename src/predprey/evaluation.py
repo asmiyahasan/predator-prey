@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from predprey.agents import Policy
-from predprey.env import PREDATOR, PREY, PredatorPreyEnv
+from predprey.env import PREDATOR, PREY, GameConfig, PredatorPreyEnv
 
 
 @dataclass
@@ -35,9 +35,10 @@ def run_match(
     episodes: int = 200,
     seed: int = 0,
     max_steps: int = 300,
+    config: GameConfig | None = None,
 ) -> MatchResult:
     """Play `episodes` games between two policies, without rendering."""
-    env = PredatorPreyEnv(max_steps=max_steps)
+    env = PredatorPreyEnv(max_steps=max_steps, config=config)
     result = MatchResult(episodes=episodes)
 
     for episode in range(episodes):

@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from predprey.agents import chaser, fleer, make_random_policy
+from predprey.observations import OBS_SIZE, OPP_REL_POS, OPP_VISIBLE, RAYS
 from predprey.physics import NUM_ACTIONS
 
 # Action numbers (must match ACTION_DIRECTIONS in physics.py)
@@ -9,10 +10,13 @@ STAY, UP, DOWN, LEFT, RIGHT = 0, 1, 2, 3, 4
 UP_LEFT, UP_RIGHT, DOWN_LEFT, DOWN_RIGHT = 5, 6, 7, 8
 
 
-def make_obs(rel_x: float, rel_y: float) -> np.ndarray:
+def make_obs(rel_x: float = 0.0, rel_y: float = 0.0, visible: bool = True) -> np.ndarray:
     """Build an observation with only the opponent's relative position set."""
-    obs = np.zeros(8, dtype=np.float32)
-    obs[4:6] = [rel_x, rel_y]
+    obs = np.zeros(OBS_SIZE, dtype=np.float32)
+    if visible:
+        obs[OPP_VISIBLE] = 1.0
+        obs[OPP_REL_POS] = [rel_x, rel_y]
+    obs[RAYS] = 0.5  # every direction equally open
     return obs
 
 
@@ -51,8 +55,19 @@ def test_scripted_agents_ignore_scale():
     assert chaser(make_obs(0.05, 0.0)) == chaser(make_obs(0.9, 0.0)) == RIGHT
 
 
+def test_fleer_stays_still_when_hidden():
+    assert fleer(make_obs(visible=False)) == STAY
+
+
+def test_chaser_searches_open_space_when_prey_hidden():
+    obs = make_obs(visible=False)
+    obs[RAYS] = 0.1
+    obs[RAYS.start + 4] = 0.9  # ray 4 points straight up and has the most room
+    assert chaser(obs) == UP
+
+
 def test_random_policy_is_reproducible():
-    obs = make_obs(0.0, 0.0)
+    obs = make_obs()
     policy_a = make_random_policy(seed=42)
     policy_b = make_random_policy(seed=42)
     actions_a = [policy_a(obs) for _ in range(100)]
@@ -62,7 +77,7 @@ def test_random_policy_is_reproducible():
 
 def test_random_policy_returns_valid_actions():
     policy = make_random_policy(seed=0)
-    obs = make_obs(0.0, 0.0)
+    obs = make_obs()
     actions = {policy(obs) for _ in range(500)}
     assert actions <= set(range(NUM_ACTIONS))  # never out of range
     assert len(actions) == NUM_ACTIONS         # and uses every action eventually

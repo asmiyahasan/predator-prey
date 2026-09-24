@@ -4,14 +4,15 @@ from collections.abc import Callable
 
 import numpy as np
 
+from predprey.observations import OPP_REL_POS, OPP_VISIBLE, RAYS
 from predprey.physics import ACTION_DIRECTIONS, NUM_ACTIONS
+from predprey.sensors import RAY_DIRECTIONS
 
 # A policy takes an observation and returns an action.
-# Scripted agents and (later) trained networks all follow this shape.
+# Scripted agents and trained networks all follow this shape.
 Policy = Callable[[np.ndarray], int]
 
-# Where the opponent's relative position lives in the observation vector
-REL_POS = slice(4, 6)
+STAY = 0
 
 
 def best_action_towards(direction: np.ndarray) -> int:
@@ -21,14 +22,27 @@ def best_action_towards(direction: np.ndarray) -> int:
     return int(np.argmax(scores))
 
 
+def most_open_direction(obs: np.ndarray) -> np.ndarray:
+    """The ray direction with the most free space ahead."""
+    return RAY_DIRECTIONS[int(np.argmax(obs[RAYS]))]
+
+
+def opponent_visible(obs: np.ndarray) -> bool:
+    return obs[OPP_VISIBLE] > 0.5
+
+
 def chaser(obs: np.ndarray) -> int:
-    """Predator: always move towards the prey."""
-    return best_action_towards(obs[REL_POS])
+    """Predator: run at the prey if visible, otherwise head for open space to search."""
+    if opponent_visible(obs):
+        return best_action_towards(obs[OPP_REL_POS])
+    return best_action_towards(most_open_direction(obs))
 
 
 def fleer(obs: np.ndarray) -> int:
-    """Prey: always move directly away from the predator."""
-    return best_action_towards(-obs[REL_POS])
+    """Prey: run directly away from the predator if visible, otherwise stay hidden."""
+    if opponent_visible(obs):
+        return best_action_towards(-obs[OPP_REL_POS])
+    return STAY
 
 
 def make_random_policy(seed: int | None = None) -> Policy:

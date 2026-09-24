@@ -1,9 +1,12 @@
+import json
+
 import numpy as np
 import pytest
 from pettingzoo.test import parallel_api_test
 
-from predprey.env import PREDATOR, PREY, PredatorPreyEnv
-from predprey.physics import NUM_ACTIONS
+from predprey.env import PREDATOR, PREY, GameConfig, PredatorPreyEnv
+from predprey.observations import OBS_SIZE, OPP_REL_POS, OPP_REL_VEL, OPP_VISIBLE
+from predprey.physics import NUM_ACTIONS, overlaps_obstacle
 
 STAY = 0
 
@@ -61,3 +64,68 @@ def test_same_seed_same_episode():
         assert rewards_a == rewards_b
 
     assert env_b.agents == []  # both episodes ended on the same step
+
+
+# ----------------------------------------------------------------------
+# Obstacles, observations and config
+# ----------------------------------------------------------------------
+def test_observation_size():
+    env = PredatorPreyEnv()
+    observations, _ = env.reset(seed=0)
+    for agent in env.possible_agents:
+        assert observations[agent].shape == (OBS_SIZE,)
+        assert observations[agent].dtype == np.float32
+
+
+def test_agents_never_spawn_inside_obstacles():
+    env = PredatorPreyEnv()
+    for seed in range(300):
+        env.reset(seed=seed)
+        for state in env.states.values():
+            assert not overlaps_obstacle(state.position, state.radius, env.obstacles)
+
+
+def test_hidden_opponent_is_zeroed_out():
+    env = PredatorPreyEnv()
+    env.reset(seed=0)
+    # Put a block between the agents: the left and right of the bottom-left block
+    env.states[PREDATOR].position[:] = [1.0, 3.0]
+    env.states[PREY].position[:] = [5.0, 3.0]
+    env.states[PREY].velocity[:] = [2.0, 0.0]
+    obs = env._get_obs(PREDATOR)
+
+    assert not env.can_see_each_other()
+    assert obs[OPP_VISIBLE] == 0.0
+    assert np.all(obs[OPP_REL_POS] == 0.0)
+    assert np.all(obs[OPP_REL_VEL] == 0.0)
+
+
+def test_visible_opponent_is_reported():
+    env = PredatorPreyEnv()
+    env.reset(seed=0)
+    env.states[PREDATOR].position[:] = [1.0, 5.0]   # middle corridor, clear view
+    env.states[PREY].position[:] = [9.0, 5.0]
+    obs = env._get_obs(PREDATOR)
+
+    assert env.can_see_each_other()
+    assert obs[OPP_VISIBLE] == 1.0
+    assert obs[OPP_REL_POS][0] == pytest.approx(0.8)  # 8 units right, / ARENA_SIZE
+
+
+def test_no_obstacles_config():
+    env = PredatorPreyEnv(config=GameConfig(obstacles=()))
+    env.reset(seed=0)
+    assert len(env.obstacles) == 0
+    assert env.can_see_each_other()
+
+
+def test_config_survives_json_round_trip():
+    config = GameConfig(predator_max_speed=3.3, obstacles=((1.0, 2.0, 3.0, 4.0),))
+    restored = GameConfig.from_dict(json.loads(json.dumps(config.to_dict())))
+    assert restored == config
+
+
+def test_config_changes_species_speed():
+    env = PredatorPreyEnv(config=GameConfig(predator_max_speed=5.0))
+    env.reset(seed=0)
+    assert env.states[PREDATOR].max_speed == 5.0
