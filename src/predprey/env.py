@@ -34,7 +34,7 @@ class PredatorPreyEnv(ParallelEnv):
 
         # Species settings: predator is faster, prey is more agile
         self.species = {
-            PREDATOR: {"max_speed": 3.3, "acceleration": 7.0},
+            PREDATOR: {"max_speed": 3.0, "acceleration": 7.0},
             PREY: {"max_speed": 3.0, "acceleration": 9.0},
         }
 
