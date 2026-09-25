@@ -135,11 +135,17 @@ class PredatorPreyEnv(ParallelEnv):
         self.step_count = 0
         self.caught = False
 
-        predator_pos = self._random_free_position()
-        prey_pos = self._random_free_position()
-        # Rejection sampling: re-roll the prey until it's far enough away
-        while np.linalg.norm(prey_pos - predator_pos) < MIN_SPAWN_DISTANCE:
+        options = options or {}
+        if "predator_position" in options and "prey_position" in options:
+            # Exact start positions, e.g. for replaying a recorded game on the website
+            predator_pos = np.asarray(options["predator_position"], dtype=np.float64)
+            prey_pos = np.asarray(options["prey_position"], dtype=np.float64)
+        else:
+            predator_pos = self._random_free_position()
             prey_pos = self._random_free_position()
+            # Rejection sampling: re-roll the prey until it's far enough away
+            while np.linalg.norm(prey_pos - predator_pos) < MIN_SPAWN_DISTANCE:
+                prey_pos = self._random_free_position()
 
         self.states = {
             PREDATOR: AgentState(position=predator_pos, **self.species[PREDATOR]),
