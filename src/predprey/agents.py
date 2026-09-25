@@ -4,7 +4,13 @@ from collections.abc import Callable
 
 import numpy as np
 
-from predprey.observations import OPP_REL_POS, OPP_VISIBLE, RAYS
+from predprey.observations import (
+    LAST_SEEN_REL_POS,
+    OPP_REL_POS,
+    OPP_VISIBLE,
+    RAYS,
+    TIME_SINCE_SEEN,
+)
 from predprey.physics import ACTION_DIRECTIONS, NUM_ACTIONS
 from predprey.sensors import RAY_DIRECTIONS
 
@@ -13,6 +19,9 @@ from predprey.sensors import RAY_DIRECTIONS
 Policy = Callable[[np.ndarray], int]
 
 STAY = 0
+
+# Close enough to the last-seen spot to count as 'arrived' (0.5 world units)
+ARRIVED_DISTANCE = 0.05
 
 
 def best_action_towards(direction: np.ndarray) -> int:
@@ -32,9 +41,17 @@ def opponent_visible(obs: np.ndarray) -> bool:
 
 
 def chaser(obs: np.ndarray) -> int:
-    """Predator: run at the prey if visible, otherwise head for open space to search."""
+    """Predator: run at the prey if visible, otherwise go to where it was last seen.
+
+    Once it reaches that spot (or has never seen the prey), it searches open space.
+    """
     if opponent_visible(obs):
         return best_action_towards(obs[OPP_REL_POS])
+
+    to_last_seen = obs[LAST_SEEN_REL_POS]
+    remembers = obs[TIME_SINCE_SEEN] < 1.0
+    if remembers and np.linalg.norm(to_last_seen) > ARRIVED_DISTANCE:
+        return best_action_towards(to_last_seen)
     return best_action_towards(most_open_direction(obs))
 
 

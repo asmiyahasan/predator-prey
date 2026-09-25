@@ -64,7 +64,7 @@ class GameConfig:
 
 
 class PredatorPreyEnv(ParallelEnv):
-    metadata = {"name": "predator_prey_v1", "render_modes": ["human"], "render_fps": 10}
+    metadata = {"name": "predator_prey_v2", "render_modes": ["human"], "render_fps": 10}
 
     def __init__(
         self,
@@ -105,6 +105,11 @@ class PredatorPreyEnv(ParallelEnv):
         self.step_count = 0
         self.caught = False
 
+        # Each agent's memory of its opponent: where it was last seen, and how long ago
+        self.last_seen: dict[str, np.ndarray | None] = {}
+        self.steps_since_seen: dict[str, int | None] = {}
+        self.visible = False
+
         self.renderer = None
         if render_mode == "human":
             from predprey.render import Renderer  # imported here so CI never needs a display
@@ -141,6 +146,11 @@ class PredatorPreyEnv(ParallelEnv):
             PREY: AgentState(position=prey_pos, **self.species[PREY]),
         }
 
+        # Nobody has seen anybody yet this episode
+        self.last_seen = {agent: None for agent in self.possible_agents}
+        self.steps_since_seen = {agent: None for agent in self.possible_agents}
+        self._update_memory()
+
         observations = {agent: self._get_obs(agent) for agent in self.agents}
         infos = {agent: {} for agent in self.agents}
         return observations, infos
@@ -150,6 +160,7 @@ class PredatorPreyEnv(ParallelEnv):
         for agent in self.agents:
             step_agent(self.states[agent], int(actions[agent]), self.obstacles)
         self.step_count += 1
+        self._update_memory()
 
         caught = is_caught(self.states[PREDATOR], self.states[PREY])
         self.caught = caught
@@ -166,9 +177,8 @@ class PredatorPreyEnv(ParallelEnv):
         truncations = {agent: out_of_time and not caught for agent in self.agents}
 
         observations = {agent: self._get_obs(agent) for agent in self.agents}
-        visible = self.can_see_each_other()
         infos = {
-            agent: {"caught": caught, "steps": self.step_count, "visible": visible}
+            agent: {"caught": caught, "steps": self.step_count, "visible": self.visible}
             for agent in self.agents
         }
 
@@ -184,7 +194,7 @@ class PredatorPreyEnv(ParallelEnv):
                 self.step_count,
                 self.caught,
                 obstacles=self.obstacles,
-                visible=self.can_see_each_other(),
+                visible=self.visible,
             )
 
     def close(self):
@@ -199,6 +209,24 @@ class PredatorPreyEnv(ParallelEnv):
             self.states[PREDATOR].position, self.states[PREY].position, self.obstacles
         )
 
+    def _update_memory(self) -> None:
+        """Refresh what each agent remembers about its opponent.
+
+        Line of sight is symmetric, so both agents see each other or neither does.
+        """
+        self.visible = self.can_see_each_other()
+        for agent in self.possible_agents:
+            opponent = self._opponent(agent)
+            if self.visible:
+                self.last_seen[agent] = self.states[opponent].position.copy()
+                self.steps_since_seen[agent] = 0
+            elif self.steps_since_seen[agent] is not None:
+                self.steps_since_seen[agent] += 1
+
+    @staticmethod
+    def _opponent(agent: str) -> str:
+        return PREY if agent == PREDATOR else PREDATOR
+
     def _random_free_position(self) -> np.ndarray:
         """A random position inside the arena that doesn't overlap an obstacle."""
         radius = AgentState(position=[0.0, 0.0]).radius
@@ -208,6 +236,11 @@ class PredatorPreyEnv(ParallelEnv):
                 return position
 
     def _get_obs(self, agent: str) -> np.ndarray:
-        me = self.states[agent]
-        other = self.states[PREY if agent == PREDATOR else PREDATOR]
-        return build_observation(me, other, self.obstacles)
+        return build_observation(
+            me=self.states[agent],
+            other=self.states[self._opponent(agent)],
+            obstacles=self.obstacles,
+            visible=self.visible,
+            last_seen=self.last_seen[agent],
+            steps_since_seen=self.steps_since_seen[agent],
+        )

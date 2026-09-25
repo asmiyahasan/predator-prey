@@ -5,7 +5,15 @@ import pytest
 from pettingzoo.test import parallel_api_test
 
 from predprey.env import PREDATOR, PREY, GameConfig, PredatorPreyEnv
-from predprey.observations import OBS_SIZE, OPP_REL_POS, OPP_REL_VEL, OPP_VISIBLE
+from predprey.observations import (
+    LAST_SEEN_REL_POS,
+    MEMORY_HORIZON,
+    OBS_SIZE,
+    OPP_REL_POS,
+    OPP_REL_VEL,
+    OPP_VISIBLE,
+    TIME_SINCE_SEEN,
+)
 from predprey.physics import NUM_ACTIONS, overlaps_obstacle
 
 STAY = 0
@@ -92,9 +100,10 @@ def test_hidden_opponent_is_zeroed_out():
     env.states[PREDATOR].position[:] = [1.0, 3.0]
     env.states[PREY].position[:] = [5.0, 3.0]
     env.states[PREY].velocity[:] = [2.0, 0.0]
+    env._update_memory()
     obs = env._get_obs(PREDATOR)
 
-    assert not env.can_see_each_other()
+    assert not env.visible
     assert obs[OPP_VISIBLE] == 0.0
     assert np.all(obs[OPP_REL_POS] == 0.0)
     assert np.all(obs[OPP_REL_VEL] == 0.0)
@@ -105,9 +114,10 @@ def test_visible_opponent_is_reported():
     env.reset(seed=0)
     env.states[PREDATOR].position[:] = [1.0, 5.0]   # middle corridor, clear view
     env.states[PREY].position[:] = [9.0, 5.0]
+    env._update_memory()
     obs = env._get_obs(PREDATOR)
 
-    assert env.can_see_each_other()
+    assert env.visible
     assert obs[OPP_VISIBLE] == 1.0
     assert obs[OPP_REL_POS][0] == pytest.approx(0.8)  # 8 units right, / ARENA_SIZE
 
@@ -129,3 +139,59 @@ def test_config_changes_species_speed():
     env = PredatorPreyEnv(config=GameConfig(predator_max_speed=5.0))
     env.reset(seed=0)
     assert env.states[PREDATOR].max_speed == 5.0
+
+
+# ----------------------------------------------------------------------
+# Memory: where the opponent was last seen
+# ----------------------------------------------------------------------
+def _place(env, predator_pos, prey_pos):
+    """Move both agents and refresh visibility and memory, as a real step would."""
+    env.states[PREDATOR].position[:] = predator_pos
+    env.states[PREY].position[:] = prey_pos
+    env._update_memory()
+
+
+def test_memory_starts_empty_when_hidden_at_spawn():
+    env = PredatorPreyEnv()
+    env.reset(seed=0)
+    env.last_seen = {a: None for a in env.possible_agents}
+    env.steps_since_seen = {a: None for a in env.possible_agents}
+    _place(env, [1.0, 3.0], [5.0, 3.0])  # a block between them
+    obs = env._get_obs(PREDATOR)
+    assert obs[TIME_SINCE_SEEN] == 1.0
+    assert np.all(obs[LAST_SEEN_REL_POS] == 0.0)
+
+
+def test_memory_remembers_last_sighting():
+    env = PredatorPreyEnv()
+    env.reset(seed=0)
+    _place(env, [1.0, 5.0], [5.0, 5.0])       # clear view along the middle corridor
+    obs = env._get_obs(PREDATOR)
+    assert obs[TIME_SINCE_SEEN] == 0.0
+    assert obs[LAST_SEEN_REL_POS][0] == pytest.approx(0.4)
+
+    # Prey slips behind a block; predator should remember where it was
+    for _ in range(10):
+        _place(env, [1.0, 5.0], [5.0, 3.0])
+    obs = env._get_obs(PREDATOR)
+    assert obs[OPP_VISIBLE] == 0.0
+    assert obs[LAST_SEEN_REL_POS] == pytest.approx([0.4, 0.0])   # still points at (5, 5)
+    assert obs[TIME_SINCE_SEEN] == pytest.approx(10 / MEMORY_HORIZON)
+
+
+def test_memory_is_relative_to_current_position():
+    env = PredatorPreyEnv()
+    env.reset(seed=0)
+    _place(env, [1.0, 5.0], [5.0, 5.0])       # seen at (5, 5)
+    _place(env, [1.0, 3.0], [5.0, 3.0])       # both move, block in the way
+    obs = env._get_obs(PREDATOR)
+    assert obs[LAST_SEEN_REL_POS] == pytest.approx([0.4, 0.2])   # (5,5) - (1,3), / 10
+
+
+def test_memory_caps_at_one():
+    env = PredatorPreyEnv()
+    env.reset(seed=0)
+    _place(env, [1.0, 5.0], [5.0, 5.0])
+    for _ in range(MEMORY_HORIZON * 2):
+        _place(env, [1.0, 3.0], [5.0, 3.0])
+    assert env._get_obs(PREDATOR)[TIME_SINCE_SEEN] == 1.0

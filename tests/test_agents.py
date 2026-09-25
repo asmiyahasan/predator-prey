@@ -2,7 +2,14 @@ import numpy as np
 import pytest
 
 from predprey.agents import chaser, fleer, make_random_policy
-from predprey.observations import OBS_SIZE, OPP_REL_POS, OPP_VISIBLE, RAYS
+from predprey.observations import (
+    LAST_SEEN_REL_POS,
+    OBS_SIZE,
+    OPP_REL_POS,
+    OPP_VISIBLE,
+    RAYS,
+    TIME_SINCE_SEEN,
+)
 from predprey.physics import NUM_ACTIONS
 
 # Action numbers (must match ACTION_DIRECTIONS in physics.py)
@@ -16,6 +23,7 @@ def make_obs(rel_x: float = 0.0, rel_y: float = 0.0, visible: bool = True) -> np
     if visible:
         obs[OPP_VISIBLE] = 1.0
         obs[OPP_REL_POS] = [rel_x, rel_y]
+    obs[TIME_SINCE_SEEN] = 1.0  # no memory unless a test sets one
     obs[RAYS] = 0.5  # every direction equally open
     return obs
 
@@ -63,6 +71,23 @@ def test_chaser_searches_open_space_when_prey_hidden():
     obs = make_obs(visible=False)
     obs[RAYS] = 0.1
     obs[RAYS.start + 4] = 0.9  # ray 4 points straight up and has the most room
+    assert chaser(obs) == UP
+
+
+def test_chaser_heads_to_last_seen_position_when_prey_hidden():
+    obs = make_obs(visible=False)
+    obs[LAST_SEEN_REL_POS] = [-0.3, 0.0]  # prey was last seen to the left
+    obs[TIME_SINCE_SEEN] = 0.2
+    obs[RAYS.start + 4] = 0.9             # open space is up, but memory wins
+    assert chaser(obs) == LEFT
+
+
+def test_chaser_searches_once_it_reaches_last_seen_spot():
+    obs = make_obs(visible=False)
+    obs[LAST_SEEN_REL_POS] = [0.01, 0.0]  # basically standing on it
+    obs[TIME_SINCE_SEEN] = 0.2
+    obs[RAYS] = 0.1
+    obs[RAYS.start + 4] = 0.9
     assert chaser(obs) == UP
 
 
