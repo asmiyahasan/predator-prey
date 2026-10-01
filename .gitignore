@@ -12,3 +12,6 @@ wheels/
 
 models/
 runs/
+champion/
+reports/
+release/
