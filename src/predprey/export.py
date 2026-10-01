@@ -134,3 +134,31 @@ def load_exported(path: Path) -> dict:
     if data.get("format_version") != FORMAT_VERSION:
         raise ValueError(f"unsupported export format: {data.get('format_version')}")
     return data
+
+
+def policy_from_export(data: dict):
+    """Turn an exported model into a fast Policy (observation in, action out).
+
+    Same maths as `forward`, but the weights are converted to arrays once up
+    front instead of on every call, which matters when playing many games.
+    """
+    layers = [
+        (
+            np.asarray(layer["weights"], dtype=np.float32),
+            np.asarray(layer["bias"], dtype=np.float32),
+            layer["activation"],
+        )
+        for layer in data["layers"]
+    ]
+
+    def policy(obs: np.ndarray) -> int:
+        x = np.asarray(obs, dtype=np.float32)
+        for weights, bias, activation in layers:
+            x = weights @ x + bias
+            if activation == "tanh":
+                x = np.tanh(x)
+            elif activation == "relu":
+                x = np.maximum(x, 0.0)
+        return int(np.argmax(x))
+
+    return policy

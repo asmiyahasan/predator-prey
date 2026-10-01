@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "predator": {
+    "sha256": "23a03e35ca44828b8e1298dd75e1f1062e6debb5227430e5708fee9fbabbc227",
+    "source": "models/selfplay_memory/predator/gen_010.zip",
+    "promoted_in_version": 1,
+    "results": {
+      "vs_fleer": 0.8666666666666667,
+      "baseline_ok": true,
+      "promote": true
+    }
+  },
+  "prey": {
+    "sha256": "42883abd8f2a92b7548373cb0558aa370e21d9cac4c5faeb14dae6389203098f",
+    "source": "models/selfplay_memory/prey/gen_010.zip",
+    "promoted_in_version": 1,
+    "results": {
+      "vs_chaser": 0.9666666666666667,
+      "baseline_ok": true,
+      "promote": true
+    }
+  },
+  "history": [
+    {
+      "version": 1,
+      "promoted": [
+        "predator",
+        "prey"
+      ],
+      "at": "2026-10-01T04:00:07+00:00",
+      "report": "reports/gate_20261001_040007.json"
+    }
+  ]
+}
