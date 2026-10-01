@@ -41,7 +41,7 @@ jobs:
           # The champions become the "Hard" opponents
           cp release-files/predator.json website/public/models/predator-hard.json
           cp release-files/prey.json     website/public/models/prey-hard.json
-          cp release-files/model_card.json website/public/models/model_card.json
+          cp release-files/model_card.json website/public/model_card.json
           # The parity fixtures travel with the models, so the website's tests
           # always check the TypeScript game against the game these models learned in
           cp release-files/parity.json   website/src/game/fixtures/parity.json
@@ -61,7 +61,7 @@ jobs:
 
             This pull request:
             - replaces `public/models/predator-hard.json` and `prey-hard.json` with the new champions
-            - updates `public/models/model_card.json`
+            - updates `public/model_card.json`
             - updates `src/game/fixtures/parity.json` (the recorded games for parity tests)
 
             The checks below run every parity test against these files.
