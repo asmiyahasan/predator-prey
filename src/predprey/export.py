@@ -20,7 +20,11 @@ The JSON file contains everything the website needs to run the agent:
         {"weights": [[...], ...], "bias": [...], "activation": "none"}
       ],
       "game_config": {...},       # the game this model was trained in
-      "metadata": {...}           # where it came from, when, etc.
+      "metadata": {...},          # where it came from, when, etc.
+      "test_vectors": [           # sample inputs with the outputs Python computed,
+        {"obs": [...], "logits": [...], "action": 3},   # so other implementations
+        ...                                             # can check themselves
+      ]
     }
 
 `weights` has shape [out_features][in_features], so a layer computes
@@ -93,9 +97,18 @@ def export_model(
     agent: str,
     game_config: dict,
     metadata: dict | None = None,
+    test_observations: list[np.ndarray] | None = None,
 ) -> dict:
     """Write the actor and its context to a JSON file, and return the data."""
     layers = extract_actor_layers(model)
+    test_vectors = []
+    for obs in test_observations or []:
+        logits = forward(layers, obs)
+        test_vectors.append({
+            "obs": np.asarray(obs, dtype=np.float32).tolist(),
+            "logits": logits.tolist(),
+            "action": int(np.argmax(logits)),
+        })
     data = {
         "format_version": FORMAT_VERSION,
         "agent": agent,
@@ -108,6 +121,7 @@ def export_model(
             "trained_steps": int(model.num_timesteps),
             **(metadata or {}),
         },
+        "test_vectors": test_vectors,
     }
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

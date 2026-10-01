@@ -20,6 +20,7 @@ from predprey.export import choose_action, export_model, load_exported
 from predprey.observations import OBS_SIZE
 
 CHECK_EPISODES = 20
+TEST_VECTORS = 50  # sample observations saved inside the export for other languages to check against
 
 
 def find_run_config(model_path: Path) -> GameConfig:
@@ -49,6 +50,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out", type=Path, default=None,
                         help="default: exports/<run>_<agent>_<file name>.json")
     return parser.parse_args()
+
+
+def sample_observations(agent: str, config: GameConfig, count: int) -> list[np.ndarray]:
+    """Observations from a few random games, spread across many situations."""
+    env = PredatorPreyEnv(config=config)
+    rng = np.random.default_rng(1)
+    collected = []
+    episode = 0
+    while len(collected) < count * 5:
+        observations, _ = env.reset(seed=20_000 + episode)
+        while env.agents:
+            collected.append(observations[agent])
+            observations, _, _, _, _ = env.step({a: int(rng.integers(9)) for a in env.agents})
+        episode += 1
+    every = len(collected) // count
+    return collected[::every][:count]
 
 
 def check_export(model: PPO, exported: dict, agent: str, config: GameConfig) -> int:
@@ -103,6 +120,7 @@ def main() -> None:
         agent=agent,
         game_config=config.to_dict(),
         metadata={"source_model": str(args.model), "run": run_name},
+        test_observations=sample_observations(agent, config, TEST_VECTORS),
     )
     size_kb = out.stat().st_size / 1024
     print(f"Wrote {out} ({size_kb:.0f} KB)")
